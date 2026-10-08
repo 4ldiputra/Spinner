@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spin Undian</title>
+<style>
+  :root { --bg:#fbfbfe; --ink:#1f2330; --line:#d9dce6; --accent:#d62828; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+  .app { display:flex; flex-wrap:wrap; gap:24px; justify-content:center; align-items:flex-start; padding:20px; max-width:1100px; margin:0 auto; }
+  .stage { position:relative; width:min(560px, 92vw); aspect-ratio:1; }
+  canvas { width:100%; height:100%; cursor:pointer; display:block; }
+  .pointer { position:absolute; right:-6px; top:50%; width:0; height:0; transform:translateY(-50%);
+    border-top:18px solid transparent; border-bottom:18px solid transparent; border-right:38px solid var(--accent);
+    filter:drop-shadow(0 2px 3px rgba(0,0,0,.35)); pointer-events:none; }
+  .panel { width:min(340px, 92vw); }
+  textarea { width:100%; height:280px; padding:10px 12px; border:1px solid var(--ink); border-radius:6px; font:inherit; resize:vertical; }
+  .row { display:flex; gap:8px; margin:10px 0; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; padding:8px 14px; border:0; border-radius:6px; background:#e3e5ec; cursor:pointer; }
+  button:hover { background:#d5d8e2; }
+  button:focus-visible, textarea:focus-visible, input:focus-visible { outline:3px solid #4a6fa5; outline-offset:2px; }
+  button.primary { background:var(--accent); color:#fff; font-weight:600; }
+  button.primary:disabled { opacity:.5; cursor:default; }
+  .count { font-size:.85rem; color:#556; }
+  #secret { display:none; margin-top:14px; padding:12px; border:1px dashed var(--line); border-radius:6px; }
+  #secret.open { display:block; }
+  #secret input { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font:inherit; }
+  #secret small { color:#667; display:block; margin-top:6px; }
+  .gear { background:transparent; opacity:.25; padding:6px 10px; }
+  .gear:hover { opacity:.8; background:transparent; }
+  #fx { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:30; }
+  .overlay { position:fixed; inset:0; z-index:20; display:none; align-items:center; justify-content:center; background:rgba(20,20,40,.6); }
+  .overlay.show { display:flex; }
+  .box { background:#fff; border-radius:18px; padding:30px 44px; text-align:center; max-width:90vw;
+    box-shadow:0 0 0 6px #ffd23f, 0 0 60px 10px rgba(255,210,63,.7), 0 20px 60px rgba(0,0,0,.4);
+    animation:pop .7s cubic-bezier(.2,1.6,.4,1); }
+  .box h2 { margin:0; font-size:1.1rem; font-weight:600; color:#556; }
+  .box .trophy { font-size:3.2rem; animation:bounce 1s ease-in-out infinite; }
+  .box .name { font-size:clamp(2rem,8vw,3.2rem); font-weight:800; margin:6px 0 18px; word-break:break-word;
+    background:linear-gradient(90deg,#d62828,#e57a14,#27a030,#4a9fd4,#563f85,#d62828); background-size:300% 100%;
+    -webkit-background-clip:text; background-clip:text; color:transparent; animation:shine 2.5s linear infinite; }
+  @keyframes pop { from { transform:scale(.2) rotate(-8deg); opacity:0; } to { transform:scale(1) rotate(0); opacity:1; } }
+  @keyframes bounce { 50% { transform:translateY(-8px) scale(1.1); } }
+  @keyframes shine { to { background-position:300% 0; } }
+  @media (prefers-reduced-motion: reduce) { .box, .box .trophy, .box .name { animation:none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage">
+    <canvas id="wheel" width="1000" height="1000" aria-label="Roda undian"></canvas>
+    <div class="pointer"></div>
+  </div>
+
+  <div class="panel">
+    <textarea id="names" aria-label="Daftar nama" placeholder="Ketik atau tempel nama, satu per baris">Budi
+Sari
+Andi
+Dewi
+Rudi
+Maya
+Joko</textarea>
+    <div class="row">
+      <button id="spin" class="primary">Putar</button>
+      <button id="shuffle">Acak urutan</button>
+      <button id="gear" class="gear" title="Pengaturan" aria-label="Pengaturan">⚙</button>
+      <span class="count" id="count"></span>
+    </div>
+
+    <div id="secret">
+      <label for="winner"><b>Pemenang tetap</b></label>
+      <input id="winner" type="text" placeholder="Tulis nama persis seperti di daftar">
+      <small>Kosongkan untuk undian acak biasa. Tutup panel ini sebelum layar dilihat orang lain.</small>
+    </div>
+  </div>
+</div>
+
+<canvas id="fx"></canvas>
+<div class="overlay" id="result" role="dialog" aria-modal="true">
+  <div class="box">
+    <div class="trophy">🏆</div>
+    <h2>Selamat! Pemenangnya</h2>
+    <div class="name" id="winnerName"></div>
+    <button class="primary" id="close">Tutup</button>
+  </div>
+</div>
+
+<script>
+const COLORS = ["#d62828","#e57a14","#27a030","#563f85","#eee244","#fdfdfd","#4a9fd4","#e0407b","#1f9e9a","#8a5a2b"];
+const canvas = document.getElementById("wheel");
+const ctx = canvas.getContext("2d");
+const namesEl = document.getElementById("names");
+const winnerEl = document.getElementById("winner");
+const spinBtn = document.getElementById("spin");
+const overlay = document.getElementById("result");
+const TAU = Math.PI * 2;
+let rotation = 0, spinning = false;
+
+function getNames() {
+  return namesEl.value.split("\n").map(s => s.trim()).filter(Boolean);
+}
+
+function draw() {
+  const names = getNames();
+  const W = canvas.width, c = W / 2, r = c - 6;
+  ctx.clearRect(0, 0, W, W);
+  document.getElementById("count").textContent = "Entri: " + names.length;
+  if (!names.length) {
+    ctx.fillStyle = "#e3e5ec"; ctx.beginPath(); ctx.arc(c, c, r, 0, TAU); ctx.fill();
+    return;
+  }
+  const seg = TAU / names.length;
+  names.forEach((name, i) => {
+    const a0 = rotation + i * seg, a1 = a0 + seg;
+    const bg = COLORS[i % COLORS.length];
+    ctx.beginPath(); ctx.moveTo(c, c); ctx.arc(c, c, r, a0, a1); ctx.closePath();
+    ctx.fillStyle = bg; ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.lineWidth = 2; ctx.stroke();
+
+    ctx.save();
+    ctx.translate(c, c); ctx.rotate(a0 + seg / 2);
+    const light = ["#eee244","#fdfdfd"].includes(bg);
+    ctx.fillStyle = light ? "#111" : "#fff";
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    const size = Math.max(22, Math.min(64, 520 / Math.max(names.length, 6) * 1.4));
+    ctx.font = `${size}px system-ui, Arial, sans-serif`;
+    let label = name;
+    const maxW = r - 150;
+    while (ctx.measureText(label).width > maxW && label.length > 3) label = label.slice(0, -2);
+    if (label !== name) label += "…";
+    ctx.fillText(label, r - 30, 0);
+    ctx.restore();
+  });
+  ctx.beginPath(); ctx.arc(c, c, 72, 0, TAU); ctx.fillStyle = "#fff"; ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,.3)"; ctx.lineWidth = 2; ctx.stroke();
+}
+
+function pickIndex(names) {
+  const secret = winnerEl.value.trim().toLowerCase();
+  if (secret) {
+    const hits = names.map((n, i) => n.toLowerCase() === secret ? i : -1).filter(i => i >= 0);
+    if (hits.length) return hits[Math.floor(Math.random() * hits.length)];
+  }
+  return Math.floor(Math.random() * names.length);
+}
+
+function spin() {
+  if (spinning) return;
+  const names = getNames();
+  if (names.length < 2) { alert("Masukkan minimal 2 nama."); return; }
+  spinning = true; spinBtn.disabled = true;
+
+  const idx = pickIndex(names);
+  const seg = TAU / names.length;
+  // Penunjuk ada di sisi kanan (sudut 0). Berhenti di tengah segmen +/- sedikit supaya terlihat natural.
+  const jitter = (Math.random() - 0.5) * seg * 0.7;
+  const target = -((idx + 0.5) * seg + jitter);
+  const diff = (((target - rotation) % TAU) + TAU) % TAU;
+  const total = diff + TAU * (5 + Math.floor(Math.random() * 3));
+  const start = rotation, dur = 5500, t0 = performance.now();
+
+  (function frame(now) {
+    const t = Math.min(1, (now - t0) / dur);
+    const ease = 1 - Math.pow(1 - t, 4);
+    rotation = start + total * ease;
+    draw();
+    if (t < 1) return requestAnimationFrame(frame);
+    rotation %= TAU;
+    spinning = false; spinBtn.disabled = false;
+    document.getElementById("winnerName").textContent = names[idx];
+    overlay.classList.add("show");
+    celebrate();
+  })(t0);
+}
+
+
+// ===== Efek meriah =====
+const fx = document.getElementById("fx"), fctx = fx.getContext("2d");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let parts = [], fxRunning = false, fxEnd = 0;
+function sizeFx() { fx.width = innerWidth; fx.height = innerHeight; }
+addEventListener("resize", sizeFx); sizeFx();
+
+function burst(x, y, angle, n) {
+  for (let i = 0; i < n; i++) {
+    const a = angle + (Math.random() - 0.5) * 1.1, v = 10 + Math.random() * 14;
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+      w: 8 + Math.random() * 8, h: 5 + Math.random() * 6, rot: Math.random() * TAU, vr: (Math.random() - .5) * .4,
+      color: COLORS[Math.floor(Math.random() * COLORS.length)], circle: Math.random() < .25 });
+  }
+}
+function rain(n) {
+  for (let i = 0; i < n; i++) parts.push({ x: Math.random() * fx.width, y: -20, vx: (Math.random() - .5) * 3, vy: 2 + Math.random() * 4,
+    w: 8 + Math.random() * 7, h: 5 + Math.random() * 5, rot: Math.random() * TAU, vr: (Math.random() - .5) * .3,
+    color: COLORS[Math.floor(Math.random() * COLORS.length)], circle: Math.random() < .25 });
+}
+function fxFrame(now) {
+  fctx.clearRect(0, 0, fx.width, fx.height);
+  if (now < fxEnd && Math.random() < .6) rain(2);
+  parts.forEach(p => {
+    p.vy += .25; p.vx *= .99; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+    fctx.save(); fctx.translate(p.x, p.y); fctx.rotate(p.rot); fctx.fillStyle = p.color;
+    if (p.circle) { fctx.beginPath(); fctx.arc(0, 0, p.w / 2, 0, TAU); fctx.fill(); }
+    else fctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    fctx.restore();
+  });
+  parts = parts.filter(p => p.y < fx.height + 30);
+  if (parts.length || now < fxEnd) requestAnimationFrame(fxFrame); else fxRunning = false;
+}
+function stopFx() { fxEnd = 0; parts = []; }
+
+function fanfare() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const notes = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5, 1318.5];
+    notes.forEach((f, i) => {
+      const t = ac.currentTime + i * 0.13, o = ac.createOscillator(), g = ac.createGain();
+      o.type = "triangle"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(.25, t + .02);
+      g.gain.exponentialRampToValueAtTime(.0001, t + (i === notes.length - 1 ? .9 : .25));
+      o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 1);
+    });
+  } catch (e) {}
+}
+
+function celebrate() {
+  fanfare();
+  if (reduceMotion) return;
+  const H = fx.height;
+  burst(0, H * .75, -Math.PI / 3, 120);
+  burst(fx.width, H * .75, -Math.PI * 2 / 3, 120);
+  setTimeout(() => { burst(0, H * .6, -Math.PI / 3, 80); burst(fx.width, H * .6, -Math.PI * 2 / 3, 80); }, 500);
+  fxEnd = performance.now() + 4000;
+  if (!fxRunning) { fxRunning = true; requestAnimationFrame(fxFrame); }
+}
+
+spinBtn.onclick = spin;
+canvas.onclick = spin;
+document.getElementById("close").onclick = () => { overlay.classList.remove("show"); stopFx(); };
+document.getElementById("gear").onclick = () => document.getElementById("secret").classList.toggle("open");
+document.getElementById("shuffle").onclick = () => {
+  const a = getNames();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  namesEl.value = a.join("\n"); draw();
+};
+namesEl.addEventListener("input", draw);
+draw();
+</script>
+</body>
+</html>
